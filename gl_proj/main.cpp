@@ -22,7 +22,8 @@ using namespace std;
 using namespace glm;
 
 int w, h, c;
-static const int NUM_CTRL_PTS_X = 20, NUM_CTRL_PTS_Y = 20;
+static const int NUM_CTRL_PTS_X = 32, NUM_CTRL_PTS_Y = 32;
+static const int NUM_PASS = 10000;
 
 string toErrorName(GLenum  error) {
 	switch (error) {
@@ -117,27 +118,43 @@ void createCtrlGrid(float *map, int n_x, int n_y, vec2 botleft, vec2 topright) {
 	}
 }
 
+void drawLine(unsigned char* img, vec2 start, vec2 end) {
+	float slope = (end.y - start.y) / (end.x - start.x);
+	vec2 diff = end - start;
+	vec2 dir = glm::normalize(diff);
+	float length = glm::length(diff);
+	for (float t = 0; t < length; t++) {
+		vec2 pix_loc = start + t * dir;
+		int index = ((h - int(pix_loc.y)) * w + int(pix_loc.x))*c;
+		img[index] = (unsigned char)255;
+		img[index + 1] = (unsigned char)0;
+		img[index + 2] = (unsigned char)0;
+		img[index + 3] = (unsigned char)255;
+	}
+}
+
 void renderGrid(unsigned char* origin_img, float *map) {
 	unsigned char* img;
 	img = (unsigned char*)malloc(w*h*c);
 	memcpy(img, origin_img, w*h*c);
 	/* draw ctrl points as red dots*/
-	for (int i = 0; i < NUM_CTRL_PTS_Y; i++) {
-		for (int j = 0; j < NUM_CTRL_PTS_X; j++) {
-			int posX = map[(NUM_CTRL_PTS_X * i + j) * 4];
-			int posY = map[(NUM_CTRL_PTS_X * i + j) * 4 + 1];
-			if (posX == 0 || posY == 0) {
-				continue;
-			}
-			for (int m = posX; m < posX + 3; m++) {
-				for (int n = posY; n < posY + 3; n++) {
-					int index = ((h - n) * w + m)*c;
-					img[index] = (unsigned char)255;
-					img[index + 1] = (unsigned char)0;
-					img[index + 2] = (unsigned char)0;
-					img[index + 3] = (unsigned char)255;
-				}
-			}
+	for (int i = 1; i < NUM_CTRL_PTS_Y - 1; i++) {
+		for (int j = 1; j < NUM_CTRL_PTS_X - 1; j++) {
+			float posX = map[(NUM_CTRL_PTS_X * i + j) * 4];
+			float posY = map[(NUM_CTRL_PTS_X * i + j) * 4 + 1];
+			int n_index = (NUM_CTRL_PTS_X * (i+1) + j) * 4;
+			int e_index = (NUM_CTRL_PTS_X * i + j + 1) * 4;
+			drawLine(img, vec2(posX, posY), vec2(map[n_index], map[n_index + 1]));
+			drawLine(img, vec2(posX, posY), vec2(map[e_index], map[e_index + 1]));
+			//for (int m = posX; m < posX + 3; m++) {
+			//	for (int n = posY; n < posY + 3; n++) {
+			//		int index = ((h - n) * w + m)*c;
+			//		img[index] = (unsigned char)255;
+			//		img[index + 1] = (unsigned char)0;
+			//		img[index + 2] = (unsigned char)0;
+			//		img[index + 3] = (unsigned char)255;
+			//	}
+			//}
 		}
 	}
 	stbi_write_png("grid.png", w, h, c, img, 0);
@@ -219,6 +236,17 @@ int main(int argc, char **argv)
 	int num_group_y = ceil((float)NUM_CTRL_PTS_Y / 10.0f);
 	glDispatchCompute((GLuint)num_group_x, (GLuint)num_group_y, (GLuint)1);
 	checkError("glDispatchCompute");
+
+	/* many pass attempt */
+	for (int i = 0; i < NUM_PASS; i++) {
+		glBindImageTexture(1, tex_out_ctrl_pts, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
+		glBindImageTexture(2, tex_ctrl_pts, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+		glDispatchCompute((GLuint)num_group_x, (GLuint)num_group_y, (GLuint)1);
+
+		glBindImageTexture(1, tex_ctrl_pts, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
+		glBindImageTexture(2, tex_out_ctrl_pts, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+		glDispatchCompute((GLuint)num_group_x, (GLuint)num_group_y, (GLuint)1);
+	}
 
 	/* get output */
 	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, out_ctrl_pts);
