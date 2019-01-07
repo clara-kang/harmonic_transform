@@ -29,16 +29,24 @@ string GenShader::toErrorName(GLenum  error) {
 }
 
 void GenShader::generateProgramObject() {
+	GLenum err;
 	progHandle = glCreateProgram();
+	if ((err = glGetError()) != GL_NO_ERROR) {
+		cout << "glCreateProgram error: " << err << toErrorName(err) << endl;
+	}
 }
 
 void GenShader::attachComputeShader(const char *filePath) {
 	GLenum err;
 	computeShader = glCreateShader(GL_COMPUTE_SHADER);
-	char sourceCodeStr[4096];
-	strcpy_s(sourceCodeStr, extractSourceCode(filePath).c_str());
-	const char *sourceCode = sourceCodeStr;
-	cout << "extractSourceCode: " << sourceCodeStr << endl;
+	if ((err = glGetError()) != GL_NO_ERROR) {
+		cout << "glCreateShader error: " << err << toErrorName(err) << endl;
+	}
+	//char *sourceCodeStr;
+	//strcpy_s(sourceCodeStr, extractSourceCode(filePath).c_str());
+	string sourceCodeStr = extractSourceCode(filePath);
+	const char *sourceCode = sourceCodeStr.c_str();
+	cout << "extractSourceCode: " << sourceCode << endl;
 	glShaderSource(computeShader, 1, (const GLchar **)&sourceCode, NULL);
 	glCompileShader(computeShader);
 	int rvalue;
@@ -84,17 +92,16 @@ string GenShader::extractSourceCode(const char *filePath) {
 		getline(file, str, '\r');
 		strBuffer << str;
 	}
-	//while (getline(file, str)) {
-	//	strBuffer << str;
-	//	//cout << "str: " << str << endl;
-	//}
 	file.close();
 	strBuffer << '\0';  // Append null terminator.
-	//cout << "strBuffer: " << strBuffer.str() << endl;
 	return strBuffer.str();
 
 }
 
 GLint GenShader::getUniformLocation(const char *name) {
 	return glGetUniformLocation(progHandle, (const GLchar *)name);
+}
+
+void GenShader::useProgram() {
+	glUseProgram(progHandle);
 }

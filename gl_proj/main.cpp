@@ -22,6 +22,7 @@ using namespace std;
 using namespace glm;
 
 int w, h, c;
+static const int NUM_CTRL_PTS_X = 20, NUM_CTRL_PTS_Y = 20;
 
 string toErrorName(GLenum  error) {
 	switch (error) {
@@ -102,6 +103,47 @@ unsigned char* getUvPtrs(int sizeX, int sizeY) {
 	return uvPtrs;
 }
 
+void createCtrlGrid(float *map, int n_x, int n_y, vec2 botleft, vec2 topright) {
+	double w = topright.x - botleft.x;
+	double h = topright.y - botleft.y;
+	float r = ((topright.x - botleft.x) / (float)n_x + (topright.y - botleft.y) / (float)n_y) / 2.0f;
+	for (int j = 0; j < n_y; j++) {
+		for (int i = 0; i < n_x; i++) {
+			map[(j * n_x + i) * 4] = botleft.x + w * i / (n_x - 1.0);
+			map[(j * n_x + i) * 4 + 1] = botleft.y + h * j / (n_y - 1.0);
+			map[(j * n_x + i) * 4 + 2] = 0.0f;
+			map[(j * n_x + i) * 4 + 3] = r;
+		}
+	}
+}
+
+void renderGrid(unsigned char* origin_img, float *map) {
+	unsigned char* img;
+	img = (unsigned char*)malloc(w*h*c);
+	memcpy(img, origin_img, w*h*c);
+	/* draw ctrl points as red dots*/
+	for (int i = 0; i < NUM_CTRL_PTS_Y; i++) {
+		for (int j = 0; j < NUM_CTRL_PTS_X; j++) {
+			int posX = map[(NUM_CTRL_PTS_X * i + j) * 4];
+			int posY = map[(NUM_CTRL_PTS_X * i + j) * 4 + 1];
+			if (posX == 0 || posY == 0) {
+				continue;
+			}
+			for (int m = posX; m < posX + 3; m++) {
+				for (int n = posY; n < posY + 3; n++) {
+					int index = ((h - n) * w + m)*c;
+					img[index] = (unsigned char)255;
+					img[index + 1] = (unsigned char)0;
+					img[index + 2] = (unsigned char)0;
+					img[index + 3] = (unsigned char)255;
+				}
+			}
+		}
+	}
+	stbi_write_png("grid.png", w, h, c, img, 0);
+	free(img);
+}
+
 int main(int argc, char **argv)
 {
 	glutInit(&argc, argv);
@@ -115,9 +157,12 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	GenShader m_shader;
+	GenShader m_shader_ctrlpoints;
+	m_shader_ctrlpoints.generateProgramObject();
+	m_shader_ctrlpoints.attachComputeShader("shaders/move_ctrl_points.cs");
+
 	m_shader.generateProgramObject();
 	m_shader.attachComputeShader("shaders/computeShader.cs");
-	checkError("getUniformLocation");
 
 	/* prepare data */
 	unsigned char* image_data = stbi_load("watch.png", &w, &h, &c, STBI_rgb_alpha);
@@ -127,14 +172,74 @@ int main(int argc, char **argv)
 		throw(std::string("Failed to load texture"));
 	}
 	unsigned char* output_data = new unsigned char[w*h*c];
+
+	/* create grid */
+	float ctrl_pts[NUM_CTRL_PTS_X * NUM_CTRL_PTS_Y * 4];
+	float out_ctrl_pts[NUM_CTRL_PTS_X * NUM_CTRL_PTS_Y * 4];
+	createCtrlGrid(ctrl_pts, NUM_CTRL_PTS_X, NUM_CTRL_PTS_Y, vec2(20, 325), vec2(720, 1024));
+	//renderGrid(image_data, ctrl_pts);
+
+	/* pass circle to shader */
+	m_shader_ctrlpoints.useProgram();
+	GLint circle_center_loc = m_shader_ctrlpoints.getUniformLocation("circle.center");
+	GLint circle_radius_loc = m_shader_ctrlpoints.getUniformLocation("circle.radius");
+	checkError("getUniformLocation");
+	glUniform2fv(circle_center_loc, 1, value_ptr(vec2(370.0f, 675.0f)));
+	checkError("glUniform2fv");
+	glUniform1f(circle_radius_loc, 350.0f);
+	checkError("glUniform1f");
+
+	/* pass grid to shader*/
+	GLuint tex_ctrl_pts;
+	glGenTextures(1, &tex_ctrl_pts);
+	checkError("glGenTextures");
+	glBindTexture(GL_TEXTURE_2D, tex_ctrl_pts);
+	checkError("glBindTexture");
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, NUM_CTRL_PTS_X, NUM_CTRL_PTS_Y, 0, GL_RGBA, GL_FLOAT, ctrl_pts);
+	checkError("glTexImage2D");
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindImageTexture(1, tex_ctrl_pts, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
+	checkError("glBindImageTexture");
+
+	/* pass output image */
+	GLuint tex_out_ctrl_pts;
+	glGenTextures(1, &tex_out_ctrl_pts);
+	glBindTexture(GL_TEXTURE_2D, tex_out_ctrl_pts);
+	checkError("glBindTexture");
+	glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, NUM_CTRL_PTS_X, NUM_CTRL_PTS_Y);
+	checkError("glTexStorage2D");
+	glBindImageTexture(2, tex_out_ctrl_pts, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+	checkError("glBindImageTexture");
+
+	/* invoke shader */
+	int num_group_x = ceil((float)NUM_CTRL_PTS_X / 10.0f);
+	int num_group_y = ceil((float)NUM_CTRL_PTS_Y / 10.0f);
+	glDispatchCompute((GLuint)num_group_x, (GLuint)num_group_y, (GLuint)1);
+	checkError("glDispatchCompute");
+
+	/* get output */
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, out_ctrl_pts);
+	if ((err = glGetError()) != GL_NO_ERROR) {
+		cout << "glGetTexImage error: " << err << toErrorName(err) << endl;
+	}
+	renderGrid(image_data, out_ctrl_pts);
+
+	exit(0);
+
 	unsigned char* A_ptr = new unsigned char[w*h];
 	for (int i = 0; i < w * h; i++) {
 		A_ptr[i] = (unsigned char)0;
 	}
+
+
 	// bot: 325, top:1024, left: 20, right: 720, centerx: 370, centery: 675
 	// botleft, botright, topright, topleft
 	//vec2 uv_ctrl_pts[4] = { vec2(20.0f, 325.0f), vec2(720.0f, 325.0f), vec2(720.0f, 1024.0f), vec2(20.0f, 1024.0f) };
 	//vec2 xy_ctrl_pts[4] = { vec2(370.0f, 325.0f), vec2(720.0f, 675.0f), vec2(370.0f, 1024.0f), vec2(20.0f, 675.0f) };
+
 	vec2 uv_ctrl_pts[4] = { vec2(10.0f, 325.0f), vec2(700.0f, 325.0f), vec2(740.0f, 1000.0f), vec2(20.0f, 900.0f) };
 	vec2 xy_ctrl_pts[4] = { vec2(375.0f, 320.0f), vec2(720.0f, 650.0f), vec2(365.0f, 1020.0f), vec2(15.0f, 600.0f) };
 	vec2 triangle1[3] = { xy_ctrl_pts[0], xy_ctrl_pts[1], xy_ctrl_pts[2] };
@@ -210,8 +315,8 @@ int main(int argc, char **argv)
 	glUniform4fv(B_loc, 4, value_ptr(B_array[0]));
 
 	/* invoke shader */
-	int num_group_x = ceil((double)w / 32.0);
-	int num_group_y = ceil((double)h / 32.0);
+	num_group_x = ceil((double)w / 32.0);
+	num_group_y = ceil((double)h / 32.0);
 	cout << "num_group_x: " << num_group_x << ", num_group_y: " << num_group_y << endl;
 	glDispatchCompute((GLuint)num_group_x, (GLuint)num_group_y, (GLuint)1);
 	checkError("glDispatchCompute");
