@@ -23,7 +23,7 @@ using namespace glm;
 
 int w, h, c;
 static const int NUM_CTRL_PTS_X = 32, NUM_CTRL_PTS_Y = 32;
-static const int NUM_PASS = 10000;
+static const int NUM_PASS = 100000;
 
 string toErrorName(GLenum  error) {
 	switch (error) {
@@ -138,8 +138,8 @@ void renderGrid(unsigned char* origin_img, float *map) {
 	img = (unsigned char*)malloc(w*h*c);
 	memcpy(img, origin_img, w*h*c);
 	/* draw ctrl points as red dots*/
-	for (int i = 1; i < NUM_CTRL_PTS_Y - 1; i++) {
-		for (int j = 1; j < NUM_CTRL_PTS_X - 1; j++) {
+	for (int i = 0; i < NUM_CTRL_PTS_Y - 1; i++) {
+		for (int j = 0; j < NUM_CTRL_PTS_X - 1; j++) {
 			float posX = map[(NUM_CTRL_PTS_X * i + j) * 4];
 			float posY = map[(NUM_CTRL_PTS_X * i + j) * 4 + 1];
 			int n_index = (NUM_CTRL_PTS_X * (i+1) + j) * 4;
@@ -179,12 +179,11 @@ int main(int argc, char **argv)
 	m_shader_ctrlpoints.attachComputeShader("shaders/move_ctrl_points.cs");
 
 	m_shader.generateProgramObject();
-	m_shader.attachComputeShader("shaders/computeShader.cs");
+	m_shader.attachComputeShader("shaders/bilinear_transform.cs");
 
 	/* prepare data */
 	unsigned char* image_data = stbi_load("watch.png", &w, &h, &c, STBI_rgb_alpha);
 	cout << "c: " << c << endl;
-	cout << "image size: " << strlen((char *)image_data) << endl;
 	if (image_data == nullptr) {
 		throw(std::string("Failed to load texture"));
 	}
@@ -194,7 +193,7 @@ int main(int argc, char **argv)
 	float ctrl_pts[NUM_CTRL_PTS_X * NUM_CTRL_PTS_Y * 4];
 	float out_ctrl_pts[NUM_CTRL_PTS_X * NUM_CTRL_PTS_Y * 4];
 	createCtrlGrid(ctrl_pts, NUM_CTRL_PTS_X, NUM_CTRL_PTS_Y, vec2(20, 325), vec2(720, 1024));
-	//renderGrid(image_data, ctrl_pts);
+	renderGrid(image_data, ctrl_pts);
 
 	/* pass circle to shader */
 	m_shader_ctrlpoints.useProgram();
@@ -255,44 +254,16 @@ int main(int argc, char **argv)
 	}
 	renderGrid(image_data, out_ctrl_pts);
 
-	exit(0);
-
 	unsigned char* A_ptr = new unsigned char[w*h];
 	for (int i = 0; i < w * h; i++) {
 		A_ptr[i] = (unsigned char)0;
 	}
 
-
-	// bot: 325, top:1024, left: 20, right: 720, centerx: 370, centery: 675
-	// botleft, botright, topright, topleft
-	//vec2 uv_ctrl_pts[4] = { vec2(20.0f, 325.0f), vec2(720.0f, 325.0f), vec2(720.0f, 1024.0f), vec2(20.0f, 1024.0f) };
-	//vec2 xy_ctrl_pts[4] = { vec2(370.0f, 325.0f), vec2(720.0f, 675.0f), vec2(370.0f, 1024.0f), vec2(20.0f, 675.0f) };
-
-	vec2 uv_ctrl_pts[4] = { vec2(10.0f, 325.0f), vec2(700.0f, 325.0f), vec2(740.0f, 1000.0f), vec2(20.0f, 900.0f) };
-	vec2 xy_ctrl_pts[4] = { vec2(375.0f, 320.0f), vec2(720.0f, 650.0f), vec2(365.0f, 1020.0f), vec2(15.0f, 600.0f) };
-	vec2 triangle1[3] = { xy_ctrl_pts[0], xy_ctrl_pts[1], xy_ctrl_pts[2] };
-	vec2 triangle2[3] = { xy_ctrl_pts[0], xy_ctrl_pts[2], xy_ctrl_pts[3] };
-	fillTriangle(triangle1, A_ptr, 1);
-	fillTriangle(triangle2, A_ptr, 1);
-	stbi_write_png("filled.png", w, h, 1, A_ptr, 0);
-
-	mat4 M = mat4(1.0);
-	for (int i = 0; i < 4; i++) {
-		M[i] = vec4(1, xy_ctrl_pts[i].x, xy_ctrl_pts[i].y, xy_ctrl_pts[i].x*xy_ctrl_pts[i].y);
-	}
-	cout << "M: " << glm::to_string(M) << endl;
-	cout << "inverse M: " << glm::to_string(glm::inverse(M)) << endl;
-	vec4 A = vec4(uv_ctrl_pts[0].x, uv_ctrl_pts[1].x, uv_ctrl_pts[2].x, uv_ctrl_pts[3].x) * glm::inverse(M);
-	vec4 B = vec4(uv_ctrl_pts[0].y, uv_ctrl_pts[1].y, uv_ctrl_pts[2].y, uv_ctrl_pts[3].y) * glm::inverse(M);
-	vec4 A_array[4] = { vec4(1.0), A, vec4(1.0), vec4(1.0) };
-	vec4 B_array[4] = { vec4(1.0), B, vec4(1.0), vec4(1.0) };
-	cout << "test: " << (dot(A, vec4(1.0, xy_ctrl_pts[0].x, xy_ctrl_pts[0].y, xy_ctrl_pts[0].x * xy_ctrl_pts[0].y))) << endl;
-
 	///* pass input image to shader */
+	m_shader.useProgram();
 	GLuint tex_in, tex_out;
 	glGenTextures(1, &tex_in);
 	checkError("glGenTextures");
-	//glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, tex_in);
 	checkError("glBindTexture");
 	cout << "w: " << w << ", h: " << h << endl;
@@ -312,21 +283,6 @@ int main(int argc, char **argv)
 	glBindImageTexture(1, tex_in, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
 	checkError("glBindImageTexture");
 
-	/* pass transform vector pointers*/
-	GLuint tex_ptrs;
-	glGenTextures(1, &tex_ptrs);
-	checkError("glGenTextures");
-	glBindTexture(GL_TEXTURE_2D, tex_ptrs);
-	checkError("glBindTexture");
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, A_ptr);
-	checkError("glTexImage2D");
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	glBindImageTexture(3, tex_ptrs, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
-	checkError("glBindImageTexture");
-
 	/* pass output image */
 	glGenTextures(1, &tex_out);
 	glBindTexture(GL_TEXTURE_2D, tex_out);
@@ -336,11 +292,18 @@ int main(int argc, char **argv)
 	glBindImageTexture(2, tex_out, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
 	checkError("glBindImageTexture");
 
-	/* pass A, B */
-	GLint A_loc = m_shader.getUniformLocation("A");
-	GLint B_loc = m_shader.getUniformLocation("B");
-	glUniform4fv(A_loc, 4, value_ptr(A_array[0]));
-	glUniform4fv(B_loc, 4, value_ptr(B_array[0]));
+	/* pass uv control points grid*/
+	glBindImageTexture(3, tex_out_ctrl_pts, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
+
+
+	/* pass bot_left, top_right*/
+	GLint bot_left_loc = m_shader.getUniformLocation("bot_left");
+	GLint top_right_loc = m_shader.getUniformLocation("top_right");
+	checkError("getUniformLocation");
+	glUniform2fv(bot_left_loc, 1, value_ptr(vec2(20, 325)));
+	checkError("glUniform2fv");
+	glUniform2fv(top_right_loc, 1, value_ptr(vec2(720, 1024)));
+	checkError("glUniform1f");
 
 	/* invoke shader */
 	num_group_x = ceil((double)w / 32.0);

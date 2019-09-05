@@ -1,8 +1,3 @@
-#include <stdio.h>
-#include <GL/glew.h>
-#include <fstream>
-#include <sstream>
-#include <iostream>
 #include "GenShader.h"
 
 using namespace std;
@@ -42,8 +37,6 @@ void GenShader::attachComputeShader(const char *filePath) {
 	if ((err = glGetError()) != GL_NO_ERROR) {
 		cout << "glCreateShader error: " << err << toErrorName(err) << endl;
 	}
-	//char *sourceCodeStr;
-	//strcpy_s(sourceCodeStr, extractSourceCode(filePath).c_str());
 	string sourceCodeStr = extractSourceCode(filePath);
 	const char *sourceCode = sourceCodeStr.c_str();
 	cout << "extractSourceCode: " << sourceCode << endl;
